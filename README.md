@@ -126,7 +126,9 @@ server tarball, and attaches everything plus `SHA256SUMS.txt` to a draft GitHub 
 
 Signing is optional and comes from repository secrets: `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` for Windows,
 `MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` for macOS, and `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`
-for notarization. Without them the installers are built unsigned and the run logs a warning.
+for notarization. Without them the Windows installer is unsigned and the macOS app is ad-hoc signed (not notarized), and
+the run logs a warning. macOS quarantines ad-hoc signed downloads; open the app once with right-click → Open, or run
+`xattr -dr com.apple.quarantine /Applications/Remoti.app`.
 
 ```sh
 cd apps/desktop && npm run package   # local installer for the current OS into apps/desktop/release/
