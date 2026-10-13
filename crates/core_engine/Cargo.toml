@@ -31,6 +31,7 @@ rcgen.workspace = true
 tokio-tungstenite.workspace = true
 ring.workspace = true
 spake2.workspace = true
+ml-kem.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

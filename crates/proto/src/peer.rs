@@ -48,6 +48,9 @@ pub struct Offer {
     pub spake: Bytes,
     /// Ephemeral X25519 public key.
     pub x25519: Bytes,
+    /// Ephemeral ML-KEM-768 encapsulation key (FIPS 203) for the hybrid,
+    /// post-quantum half of the key exchange.
+    pub mlkem_ek: Bytes,
     pub candidates: Vec<Candidate>,
     pub capabilities: Capabilities,
 }
@@ -60,6 +63,8 @@ pub struct Answer {
     pub spake: Bytes,
     /// Ephemeral X25519 public key.
     pub x25519: Bytes,
+    /// ML-KEM-768 ciphertext encapsulated to the viewer's `mlkem_ek`.
+    pub mlkem_ct: Bytes,
     pub candidates: Vec<Candidate>,
     /// SHA-256 of the host's ephemeral QUIC certificate (DER). Bound into the
     /// handshake transcript, so a forged certificate fails key confirmation.

@@ -40,6 +40,7 @@ tower-http = { version = "0.6", default-features = false, features = ["trace", "
 # Cryptography: ring for X25519/AES-256-GCM/HKDF/Ed25519, SPAKE2 for the one-time password PAKE.
 ring = "0.17"
 spake2 = "0.4"
+ml-kem = { version = "0.3.2", features = ["getrandom", "zeroize"] }
 
 # Serialization.
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
