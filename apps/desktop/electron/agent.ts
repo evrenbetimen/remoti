@@ -48,14 +48,33 @@ export class AgentProcess extends EventEmitter<AgentEvents> {
   private child: ChildProcessWithoutNullStreams | null = null;
   private restarts: number[] = [];
   private stopping = false;
+  /** Set while `restart` replaces the agent, so its exit is not reported as a crash. */
+  private reconfiguring = false;
 
-  constructor(private readonly opts: AgentOptions) {
+  constructor(private opts: AgentOptions) {
     super();
   }
 
   start(): void {
     this.stopping = false;
     this.spawnChild();
+  }
+
+  /** Replaces the agent's arguments; takes effect on the next start. */
+  setArgs(args: string[]): void {
+    this.opts = { ...this.opts, args };
+  }
+
+  /** Stops the running agent and starts it again with new arguments. */
+  async restart(args: string[]): Promise<void> {
+    this.setArgs(args);
+    this.reconfiguring = true;
+    try {
+      await this.stop();
+    } finally {
+      this.reconfiguring = false;
+    }
+    this.start();
   }
 
   private spawnChild(): void {
@@ -100,7 +119,14 @@ export class AgentProcess extends EventEmitter<AgentEvents> {
     });
 
     child.on('exit', (code) => {
+      // A child killed after its stop timed out can exit after its
+      // replacement has started; it no longer owns the agent slot.
+      if (this.child !== child) return;
       this.child = null;
+      if (this.reconfiguring) {
+        this.emit('event', { type: 'agent.exit', code, restarting: true });
+        return;
+      }
       const now = Date.now();
       this.restarts = this.restarts.filter((t) => now - t < RESTART_WINDOW_MS);
       const restarting = !this.stopping && this.restarts.length < MAX_RESTARTS;

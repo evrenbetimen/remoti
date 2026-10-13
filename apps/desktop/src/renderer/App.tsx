@@ -1,13 +1,15 @@
-import { useEffect, useReducer } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 
 import { ConnectPanel } from './components/ConnectPanel';
 import { HostPanel } from './components/HostPanel';
 import { RemoteView } from './components/RemoteView';
+import { ServerPanel } from './components/ServerPanel';
 import { bridge } from './lib/bridge';
 import { initialState, reducer } from './state';
 
 export function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [showServer, setShowServer] = useState(false);
 
   useEffect(() => bridge.onEvent(dispatch), []);
 
@@ -18,10 +20,17 @@ export function App() {
     <div className="app">
       <header className="topbar">
         <span className="brand">Remoti</span>
-        <span className={`status ${state.online ? 'online' : 'offline'}`}>
-          <span className="dot" />
-          {state.online ? 'Çevrimiçi' : state.agentReady ? 'Sunucuya bağlanıyor…' : 'Başlatılıyor…'}
-        </span>
+        <div className="topbar-actions">
+          <span className={`status ${state.online ? 'online' : 'offline'}`}>
+            <span className="dot" />
+            {state.online ? 'Çevrimiçi' : state.agentReady ? 'Sunucuya bağlanıyor…' : 'Başlatılıyor…'}
+          </span>
+          {!viewing && (
+            <button className="ghost" onClick={() => setShowServer((v) => !v)}>
+              Sunucu
+            </button>
+          )}
+        </div>
       </header>
 
       {state.error && (
@@ -56,6 +65,7 @@ export function App() {
         <RemoteView state={state} />
       ) : (
         <main className="panels">
+          {showServer && <ServerPanel onClose={() => setShowServer(false)} />}
           <HostPanel state={state} onAllowControl={(allowed) => dispatch({ type: 'local.allowControl', allowed })} />
           <ConnectPanel state={state} />
         </main>

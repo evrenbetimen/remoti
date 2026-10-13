@@ -5,21 +5,30 @@ import path from 'node:path';
 
 import { BrowserWindow, MessageChannelMain, type MessagePortMain, app, ipcMain, session, shell, systemPreferences } from 'electron';
 
-import type { UiCommand, UiEvent, VideoAck, VideoPacket } from '../shared/protocol';
+import type { SetSignalingResult, SignalingSettings, UiCommand, UiEvent, VideoAck, VideoPacket } from '../shared/protocol';
 import { AgentProcess, type AgentVideo, resolveAgentBinary } from './agent';
+import { loadSettings, normalizeSignalingUrl, saveSettings, settingsFile } from './settings';
 
 /** Video packets sent to the renderer but not yet acknowledged. */
 const MAX_UNACKED_FRAMES = 6;
-const SIGNALING_URL = process.env.REMOTI_SIGNALING_URL ?? 'wss://signal.remoti.app/ws';
+/** Used when the user has not saved a server address in the app. */
+const DEFAULT_SIGNALING_URL = process.env.REMOTI_SIGNALING_URL ?? 'wss://signal.remoti.app/ws';
 
 let win: BrowserWindow | null = null;
 let videoPort: MessagePortMain | null = null;
 let unacked = 0;
 let waitingForKeyframe = false;
 
+let signalingUrl = DEFAULT_SIGNALING_URL;
+let customSignaling = false;
+
+function agentArgs(url: string): string[] {
+  return ['--signaling', url, '--log-format', 'json'];
+}
+
 const agent = new AgentProcess({
   binary: resolveAgentBinary(app.isPackaged, process.resourcesPath, app.getAppPath()),
-  args: ['--signaling', SIGNALING_URL, '--log-format', 'json'],
+  args: agentArgs(signalingUrl),
 });
 
 const COMMAND_TYPES = new Set<UiCommand['type']>([
@@ -136,6 +145,37 @@ ipcMain.on('remoti:command', (e, cmd: unknown) => {
   agent.send(cmd);
 });
 
+function fromOurWindow(e: Electron.IpcMainInvokeEvent): boolean {
+  return win !== null && e.sender === win.webContents && e.senderFrame === win.webContents.mainFrame;
+}
+
+ipcMain.handle('remoti:settings:get', (e): SignalingSettings | null => {
+  if (!fromOurWindow(e)) return null;
+  return { url: signalingUrl, custom: customSignaling, defaultUrl: DEFAULT_SIGNALING_URL };
+});
+
+ipcMain.handle('remoti:settings:set-signaling', async (e, input: unknown): Promise<SetSignalingResult> => {
+  if (!fromOurWindow(e)) return { ok: false, error: 'İzin verilmedi.' };
+  let next = DEFAULT_SIGNALING_URL;
+  if (input !== null) {
+    if (typeof input !== 'string') return { ok: false, error: 'Geçersiz adres.' };
+    const normalized = normalizeSignalingUrl(input);
+    if ('error' in normalized) return { ok: false, error: normalized.error };
+    next = normalized.url;
+  }
+  try {
+    await saveSettings(settingsFile(app.getPath('userData')), input === null ? {} : { signalingUrl: next });
+  } catch (err) {
+    return { ok: false, error: `Ayar kaydedilemedi: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  customSignaling = input !== null;
+  if (next !== signalingUrl) {
+    signalingUrl = next;
+    await agent.restart(agentArgs(signalingUrl));
+  }
+  return { ok: true, url: signalingUrl };
+});
+
 ipcMain.on('remoti:open-privacy', (e, kind: unknown) => {
   if (!win || e.sender !== win.webContents || process.platform !== 'darwin') return;
   const pane = kind === 'accessibility' ? 'Privacy_Accessibility' : 'Privacy_ScreenCapture';
@@ -162,8 +202,14 @@ if (!singleInstance) {
     }
   });
 
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
     hardenSession();
+    const saved = await loadSettings(settingsFile(app.getPath('userData')));
+    if (saved.signalingUrl) {
+      signalingUrl = saved.signalingUrl;
+      customSignaling = true;
+      agent.setArgs(agentArgs(signalingUrl));
+    }
     agent.start();
     createWindow();
     app.on('activate', () => {
