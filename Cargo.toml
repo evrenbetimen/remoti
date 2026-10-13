@@ -1,0 +1,70 @@
+[workspace]
+resolver = "3"
+members = ["crates/proto", "crates/core_engine", "services/signaling"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/evrenbetimen/remoti"
+
+[workspace.dependencies]
+remoti-proto = { path = "crates/proto" }
+
+# Async runtime: only the pieces we use, no "full".
+tokio = { version = "1.47", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "sync",
+    "time",
+    "io-util",
+    "io-std",
+    "signal",
+] }
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+bytes = "1.10"
+
+# Transport: QUIC on rustls + ring; no platform verifier, peers pin certificates.
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+
+# Signaling transport.
+tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio", "ws", "json", "query"] }
+tower-http = { version = "0.6", default-features = false, features = ["trace", "limit", "timeout"] }
+
+# Cryptography: ring for X25519/AES-256-GCM/HKDF/Ed25519, SPAKE2 for the one-time password PAKE.
+ring = "0.17"
+spake2 = "0.4"
+
+# Serialization.
+serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
+serde_json = "1.0"
+postcard = { version = "1.1", default-features = false, features = ["use-std"] }
+base64 = "0.22"
+
+# Observability & errors.
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi", "json", "std"] }
+thiserror = "2.0"
+anyhow = "1.0"
+clap = { version = "4.5", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "env"] }
+
+# Media.
+openh264 = { version = "0.9", default-features = false, features = ["source"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dev.package."*"]
+# Keep dependencies (crypto, codec) fast during development.
+opt-level = 2

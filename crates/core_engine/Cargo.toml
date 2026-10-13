@@ -1,0 +1,60 @@
+[package]
+name = "remoti-core"
+description = "Remoti agent: capture, encode, E2EE QUIC transport, input injection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "remoti_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "remoti-agent"
+path = "src/main.rs"
+
+[features]
+default = ["h264"]
+# Software H.264 via OpenH264 (compiled from source; no system dependency).
+h264 = ["dep:openh264"]
+
+[dependencies]
+remoti-proto.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rcgen.workspace = true
+tokio-tungstenite.workspace = true
+ring.workspace = true
+spake2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+xxhash-rust.workspace = true
+openh264 = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { version = "0.25", features = ["highsierra"] }
+core-foundation = "0.10"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

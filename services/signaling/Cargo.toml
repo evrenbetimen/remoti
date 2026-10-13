@@ -1,0 +1,35 @@
+[package]
+name = "remoti-signaling"
+description = "Remoti signaling, STUN responder and blind relay (Axum)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "remoti_signaling"
+path = "src/lib.rs"
+
+[[bin]]
+name = "remoti-signaling"
+path = "src/main.rs"
+
+[dependencies]
+remoti-proto.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+remoti-core = { path = "../../crates/core_engine" }
+rustls.workspace = true
