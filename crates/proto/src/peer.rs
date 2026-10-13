@@ -24,7 +24,9 @@ pub struct Candidate {
     pub kind: CandidateKind,
 }
 
+/// Serialized as `h264` / `h265` / `av1` in JSON (UI); variant index in postcard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum VideoCodec {
     H264,
     H265,
@@ -80,6 +82,8 @@ pub enum RejectReason {
     RateLimited,
     /// Key confirmation failed: wrong one-time password.
     AuthFailed,
+    /// The host cannot encode any codec the viewer can decode.
+    NoCommonCodec,
     Internal,
 }
 

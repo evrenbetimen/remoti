@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use remoti_proto::bytes::Bytes;
 use remoti_proto::decode_binary;
-use remoti_proto::peer::{PeerSignal, RejectReason};
+use remoti_proto::peer::{PeerSignal, RejectReason, VideoCodec};
 use remoti_proto::signaling::{ClientMessage, DeviceId, SessionId};
 use ring::rand::SystemRandom;
 use tokio::sync::{mpsc, watch};
@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 
 use crate::capture::{self, CaptureBackend};
 use crate::congestion::RateConfig;
+use crate::encoder::CodecPreference;
 use crate::handshake;
 use crate::host::{self, HostContext, HostOutcome};
 use crate::identity::{self, DeviceIdentity};
@@ -34,6 +35,8 @@ pub struct AgentConfig {
     pub stun: Vec<String>,
     pub udp_port: u16,
     pub capture: CaptureBackend,
+    /// Host-side codec preference; negotiated against the viewer's decoders.
+    pub codec: CodecPreference,
     pub rate: RateConfig,
     pub data_dir: Option<PathBuf>,
     pub ephemeral_identity: bool,
@@ -143,7 +146,7 @@ impl Agent {
                     h.allow_control.send_replace(allowed);
                 }
             }
-            UiCommand::ViewerConnect { device_id, password } => self.start_viewer(device_id, password),
+            UiCommand::ViewerConnect { device_id, password, codecs } => self.start_viewer(device_id, password, codecs),
             UiCommand::ViewerDisconnect => self.stop_viewer(),
             UiCommand::ViewerInput { event } => self.to_viewer(ViewerCommand::Input(event)),
             UiCommand::ViewerRequestKeyframe => self.to_viewer(ViewerCommand::RequestKeyframe),
@@ -215,7 +218,7 @@ impl Agent {
         }
     }
 
-    fn start_viewer(&mut self, device_id: String, password: String) {
+    fn start_viewer(&mut self, device_id: String, password: String, codecs: Vec<VideoCodec>) {
         self.stop_viewer();
         let host_id = match DeviceId::try_from(device_id) {
             Ok(id) => id,
@@ -239,6 +242,7 @@ impl Agent {
             stun: self.stun.clone(),
             udp_port: 0,
             force_relay: self.cfg.force_relay,
+            codecs,
             cancel: cancel.clone(),
         };
         tokio::spawn(viewer::run(ctx, rx));
@@ -349,6 +353,7 @@ impl Agent {
             stun: self.stun.clone(),
             udp_port: self.cfg.udp_port,
             capture: self.cfg.capture,
+            codec: self.cfg.codec,
             rate: self.cfg.rate,
             allow_control: h.allow_control.subscribe(),
             cancel: cancel.clone(),

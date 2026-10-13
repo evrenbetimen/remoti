@@ -43,6 +43,9 @@ pub enum UiCommand {
         #[serde(rename = "deviceId")]
         device_id: String,
         password: String,
+        /// Codecs the UI's WebCodecs decoder supports; H.264 when omitted.
+        #[serde(default = "default_codecs")]
+        codecs: Vec<VideoCodec>,
     },
     #[serde(rename = "viewer.disconnect")]
     ViewerDisconnect,
@@ -67,6 +70,10 @@ pub enum UiCommand {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_codecs() -> Vec<VideoCodec> {
+    vec![VideoCodec::H264]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -149,8 +156,10 @@ pub fn webcodecs_codec(codec: VideoCodec) -> &'static str {
     match codec {
         // Constrained Baseline, level 5.1 (covers 4K30 / 1440p60).
         VideoCodec::H264 => "avc1.42E033",
+        // Main profile, level 5.1, parameter sets in-band (hev1).
         VideoCodec::H265 => "hev1.1.6.L153.B0",
-        VideoCodec::Av1 => "av01.0.08M.08",
+        // Main profile, level 5.1, 8-bit.
+        VideoCodec::Av1 => "av01.0.13M.08",
     }
 }
 

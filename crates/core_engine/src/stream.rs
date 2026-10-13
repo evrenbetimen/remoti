@@ -55,21 +55,28 @@ pub const OUTPUT_QUEUE: usize = 2;
 
 pub fn spawn(
     backend: CaptureBackend,
+    codec: VideoCodec,
     params: Arc<StreamParams>,
     out: mpsc::Sender<StreamOutput>,
 ) -> std::io::Result<JoinHandle<()>> {
     std::thread::Builder::new().name("remoti-capture".into()).spawn(move || {
-        if let Err(msg) = pipeline(backend, &params, &out) {
+        if let Err(msg) = pipeline(backend, codec, &params, &out) {
             warn!(error = %msg, "capture pipeline stopped");
             let _ = out.blocking_send(StreamOutput::Fatal(msg));
         }
     })
 }
 
-fn pipeline(backend: CaptureBackend, params: &StreamParams, out: &mpsc::Sender<StreamOutput>) -> Result<(), String> {
+fn pipeline(
+    backend: CaptureBackend,
+    codec: VideoCodec,
+    params: &StreamParams,
+    out: &mpsc::Sender<StreamOutput>,
+) -> Result<(), String> {
     let mut capturer = capture::open(backend).map_err(|e| e.to_string())?;
-    let mut encoder = encoder::create(params.bitrate_bps.load(Ordering::Relaxed), params.fps.load(Ordering::Relaxed))
-        .map_err(|e| e.to_string())?;
+    let mut encoder =
+        encoder::create(codec, params.bitrate_bps.load(Ordering::Relaxed), params.fps.load(Ordering::Relaxed))
+            .map_err(|e| e.to_string())?;
     let mut frame = Frame::new();
     let mut tracker = DeltaTracker::new();
     let started = Instant::now();
@@ -133,6 +140,15 @@ fn pipeline(backend: CaptureBackend, params: &StreamParams, out: &mpsc::Sender<S
                 if force {
                     params.request_keyframe();
                 }
+                continue;
+            }
+            Err(e) if encoder.is_hardware() => {
+                // GPU reset, driver update, session limit: continue in software
+                // with the same codec so the viewer's decoder stays valid.
+                warn!(error = %e, backend = encoder.backend(), "hardware encoder failed; switching to software");
+                encoder = encoder::create_software(codec, params.bitrate_bps.load(Ordering::Relaxed), fps)
+                    .map_err(|se| format!("{e}; no software fallback: {se}"))?;
+                params.request_keyframe();
                 continue;
             }
             Err(e) => return Err(e.to_string()),

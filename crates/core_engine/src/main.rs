@@ -11,7 +11,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use remoti_core::agent::{self, AgentConfig};
 use remoti_core::capture::CaptureBackend;
 use remoti_core::congestion::RateConfig;
+use remoti_core::encoder::CodecPreference;
 use remoti_core::ipc::{self, UiCommand, UiEvent, UiOutputs};
+use remoti_proto::peer::VideoCodec;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -31,6 +33,9 @@ struct Cli {
     udp_port: u16,
     #[arg(long, value_enum, default_value_t = CaptureBackend::Auto)]
     capture: CaptureBackend,
+    /// Video codec to send when hosting (negotiated with the viewer).
+    #[arg(long, value_enum, env = "REMOTI_CODEC", default_value_t = CodecPreference::Auto)]
+    codec: CodecPreference,
     #[arg(long, default_value_t = 20_000)]
     max_bitrate_kbps: u32,
     #[arg(long, default_value_t = 60)]
@@ -117,6 +122,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         stun: cli.stun.clone(),
         udp_port: cli.udp_port,
         capture: cli.capture,
+        codec: cli.codec,
         rate: RateConfig {
             max_bitrate_bps: cli.max_bitrate_kbps.saturating_mul(1000),
             max_fps: cli.max_fps,
@@ -155,7 +161,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             tokio::spawn(log_outputs(outputs))
         }
         Mode::Connect { device_id, password } => {
-            cmd_tx.send(UiCommand::ViewerConnect { device_id: device_id.clone(), password: password.clone() }).await?;
+            // Headless: nothing is decoded, so accept any codec the host offers.
+            let codecs = vec![VideoCodec::H265, VideoCodec::H264, VideoCodec::Av1];
+            cmd_tx
+                .send(UiCommand::ViewerConnect { device_id: device_id.clone(), password: password.clone(), codecs })
+                .await?;
             keep_open(cmd_tx, cancel.clone());
             tokio::spawn(log_outputs(outputs))
         }
