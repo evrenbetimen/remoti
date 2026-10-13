@@ -1,4 +1,4 @@
-// Low-latency WebCodecs pipeline: Annex B H.264 access units in, frames on a
+// Low-latency WebCodecs pipeline: Annex B H.264/H.265 or AV1 temporal units in, frames on a
 // canvas out. Only the newest decoded frame is ever drawn; older ones are
 // closed immediately, so GPU memory stays bounded however far decode or
 // paint fall behind.
@@ -68,7 +68,8 @@ export class LowLatencyDecoder {
         this.recover();
       },
     });
-    // No `description`: the Annex B stream carries SPS/PPS in-band with keyframes.
+    // No `description`: Annex B streams carry parameter sets in-band with
+    // keyframes, and AV1 keyframes carry their sequence header OBU.
     this.decoder.configure(chosen);
     this.needKeyframe = true;
     this.requestKeyframe();
