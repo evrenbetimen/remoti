@@ -68,9 +68,15 @@ jobs:
               echo "CSC_LINK=$CSC_LINK"
               echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD"
             } >> "$GITHUB_ENV"
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            # Ad-hoc signature: Apple Silicon refuses to run unsigned code, and
+            # without a Developer ID there is nothing to notarize, so the
+            # hardened runtime (a notarization requirement) is switched off.
+            echo "SIGN_ARGS=-c.mac.identity=- -c.mac.hardenedRuntime=false" >> "$GITHUB_ENV"
+            echo "::warning::No Developer ID certificate configured; the macOS app is ad-hoc signed and not notarized."
           else
             echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
-            echo "::warning::No code-signing certificate configured; building unsigned installers."
+            echo "::warning::No code-signing certificate configured; the Windows installer is unsigned."
           fi
           if [ "${{ matrix.os }}" = "macos-latest" ] && [ -n "$APPLE_ID" ] && [ -n "$CSC_LINK" ]; then
             {
@@ -81,7 +87,15 @@ jobs:
           fi
       - name: Build installers
         working-directory: apps/desktop
-        run: npm run build && npx electron-builder ${{ matrix.builder }} --publish never
+        shell: bash
+        run: npm run build && npx electron-builder ${{ matrix.builder }} $SIGN_ARGS --publish never
+      - name: Verify macOS signature
+        if: matrix.os == 'macos-latest'
+        working-directory: apps/desktop/release
+        run: |
+          app=$(find . -maxdepth 2 -name '*.app' -type d | head -n 1)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify --strict --verbose=2 "$app/Contents/Resources/bin/remoti-agent"
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.os }}
