@@ -24,11 +24,17 @@ const STATS_INTERVAL: Duration = Duration::from_millis(250);
 #[derive(Debug, thiserror::Error)]
 pub enum RelayError {
     #[error("relay websocket: {0}")]
-    Ws(#[from] tokio_tungstenite::tungstenite::Error),
+    Ws(Box<tokio_tungstenite::tungstenite::Error>),
     #[error("relay connect timed out")]
     Timeout,
     #[error("invalid relay url")]
     BadUrl,
+}
+
+impl From<tokio_tungstenite::tungstenite::Error> for RelayError {
+    fn from(e: tokio_tungstenite::tungstenite::Error) -> Self {
+        RelayError::Ws(Box::new(e))
+    }
 }
 
 /// Connects to the relay with a single-use token issued by signaling.
