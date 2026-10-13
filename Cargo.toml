@@ -70,3 +70,7 @@ strip = "symbols"
 [profile.dev.package."*"]
 # Keep dependencies (crypto, codec) fast during development.
 opt-level = 2
+
+[profile.dev.package.rav1e]
+# The AV1 encoder is unusably slow below full optimisation.
+opt-level = 3

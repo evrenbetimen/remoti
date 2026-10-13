@@ -21,6 +21,9 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 const STEP: Duration = Duration::from_secs(20);
+/// rav1e without its assembly paths is slow on small CI runners; the first
+/// AV1 frames only have to arrive, not arrive in real time.
+const AV1_STREAM: Duration = Duration::from_secs(90);
 
 struct Server {
     ws_url: String,
@@ -98,8 +101,8 @@ impl Agent {
 
     /// Waits until the viewer is connected, has a video config and has
     /// received `frames` video packets, recording what it saw on the way.
-    async fn wait_stream(&mut self, frames: usize) -> StreamSeen {
-        timeout(STEP, async {
+    async fn wait_stream(&mut self, frames: usize, limit: Duration) -> StreamSeen {
+        timeout(limit, async {
             let mut seen = StreamSeen::default();
             let mut connected = false;
             let mut packets = 0;
@@ -160,7 +163,8 @@ async fn run_session(force_relay: bool, expected: LinkKind, codec: VideoCodec) {
         .await
         .expect("viewer command");
 
-    let seen = viewer.wait_stream(3).await;
+    let limit = if codec == VideoCodec::Av1 { AV1_STREAM } else { STEP };
+    let seen = viewer.wait_stream(3, limit).await;
     assert_eq!(seen.transport, Some(expected));
     assert_eq!(seen.codec, Some(remoti_core::ipc::webcodecs_codec(codec)));
     assert!(seen.first_keyframe, "first frame must be a keyframe");
