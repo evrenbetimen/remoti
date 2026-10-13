@@ -1,0 +1,130 @@
+name: Release
+
+# Builds signed-when-possible installers for a version tag and attaches them,
+# together with the signaling server binary, to a draft GitHub release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to stamp into the build (without the leading v)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  VERSION: ${{ inputs.version || github.ref_name }}
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            builder: --win
+          - os: macos-latest
+            builder: --mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install NASM (rav1e assembly)
+        uses: ilammy/setup-nasm@v1
+      - name: Build agent
+        run: cargo build --release --locked -p remoti-core --features av1-asm --bin remoti-agent
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '12.3'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Stamp version
+        working-directory: apps/desktop
+        shell: bash
+        run: npm version --no-git-tag-version --allow-same-version "${VERSION#v}"
+      - name: Load signing credentials
+        shell: bash
+        env:
+          CSC_LINK: ${{ matrix.os == 'windows-latest' && secrets.WIN_CSC_LINK || secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ matrix.os == 'windows-latest' && secrets.WIN_CSC_KEY_PASSWORD || secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # Only export what is configured: electron-builder treats an empty
+        # CSC_LINK as a broken certificate rather than "no signing".
+        run: |
+          if [ -n "$CSC_LINK" ]; then
+            {
+              echo "CSC_LINK=$CSC_LINK"
+              echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          else
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "::warning::No code-signing certificate configured; building unsigned installers."
+          fi
+          if [ "${{ matrix.os }}" = "macos-latest" ] && [ -n "$APPLE_ID" ] && [ -n "$CSC_LINK" ]; then
+            {
+              echo "APPLE_ID=$APPLE_ID"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD"
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+          fi
+      - name: Build installers
+        working-directory: apps/desktop
+        run: npm run build && npx electron-builder ${{ matrix.builder }} --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+
+  signaling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p remoti-signaling
+      - name: Package
+        shell: bash
+        run: |
+          name="remoti-signaling-${VERSION#v}-linux-x64"
+          mkdir -p "dist/$name"
+          cp target/release/remoti-signaling README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signaling-linux
+          if-no-files-found: error
+          path: dist/*.tar.gz
+
+  publish:
+    needs: [desktop, signaling]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        working-directory: artifacts
+        run: sha256sum * > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', inputs.version) }}
+          draft: true
+          generate_release_notes: true
+          files: artifacts/*

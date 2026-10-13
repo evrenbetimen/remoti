@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use remoti_proto::bytes::Bytes;
 use remoti_proto::encode_binary;
 use remoti_proto::input::InputEvent;
-use remoti_proto::peer::{Offer, PeerSignal, RejectReason};
+use remoti_proto::peer::{Offer, PeerSignal, RejectReason, VideoCodec};
 use remoti_proto::signaling::{ClientMessage, DeviceId, SessionId};
 use remoti_proto::wire::{VideoFrame, WireMessage};
 use ring::rand::SystemRandom;
@@ -19,6 +19,7 @@ use tracing::{debug, info, warn};
 
 use crate::capture::CaptureBackend;
 use crate::congestion::{RateConfig, RateController, RateSample};
+use crate::encoder::{self, CodecPreference};
 use crate::handshake::{self, HandshakeError};
 use crate::input::{InputInjector, InputPolicy, InputSanitizer, NullInjector, SafeEvent};
 use crate::ipc::{SessionRole, SessionState, UiEvent, UiSink};
@@ -43,6 +44,7 @@ pub struct HostContext {
     pub stun: Vec<String>,
     pub udp_port: u16,
     pub capture: CaptureBackend,
+    pub codec: CodecPreference,
     pub rate: RateConfig,
     pub allow_control: watch::Receiver<bool>,
     pub cancel: CancellationToken,
@@ -73,10 +75,10 @@ pub async fn run(ctx: HostContext, mut route: Route, viewer: DeviceId, offer: Of
         r = establish(&ctx, &mut route, &viewer, &offer) => r,
     };
     let result = match established {
-        Ok(link) => {
+        Ok((link, codec)) => {
             emit(SessionState::Connected, Some(link.kind), None);
             // The stream loop watches the cancel token itself so it can say Bye.
-            stream_loop(&ctx, &mut route, link).await
+            stream_loop(&ctx, &mut route, link, codec).await
         }
         Err(e) => Err(e),
     };
@@ -109,6 +111,8 @@ enum SessionError {
     Cancelled,
     #[error("authentication failed")]
     Auth,
+    #[error("no video codec in common with the viewer")]
+    NoCommonCodec,
     #[error("handshake: {0}")]
     Handshake(HandshakeError),
     #[error("network: {0}")]
@@ -160,8 +164,13 @@ async fn establish(
     route: &mut Route,
     viewer: &DeviceId,
     offer: &Offer,
-) -> Result<SecureLink, SessionError> {
+) -> Result<(SecureLink, VideoCodec), SessionError> {
     let session = route.id.clone();
+    let Some(codec) = encoder::negotiate(ctx.codec, &offer.capabilities.codecs) else {
+        let _ = send_peer(&ctx.signaling, viewer, &session, &PeerSignal::Reject(RejectReason::NoCommonCodec)).await;
+        return Err(SessionError::NoCommonCodec);
+    };
+    info!(?codec, "negotiated video codec");
     let rng = SystemRandom::new();
     let socket = network::bind_udp(ctx.udp_port).await?;
     let candidates = network::gather_candidates(&socket, &ctx.stun, &rng).await;
@@ -175,7 +184,7 @@ async fn establish(
         offer,
         candidates,
         cert.sha256,
-        remoti_proto::peer::VideoCodec::H264,
+        codec,
     ) {
         Ok(v) => v,
         Err(HandshakeError::Version(v)) => {
@@ -208,7 +217,7 @@ async fn establish(
         Err(e) => return Err(e.into()),
     };
     info!(transport = ?link.kind, "host session secured");
-    Ok(link)
+    Ok((link, codec))
 }
 
 async fn wait_relay(route: &mut Route) -> Result<crate::transport::RawLink, SessionError> {
@@ -260,7 +269,12 @@ fn forward(tx: &std::sync::mpsc::SyncSender<SafeEvent>, events: Vec<SafeEvent>) 
     }
 }
 
-async fn stream_loop(ctx: &HostContext, route: &mut Route, mut link: SecureLink) -> Result<(), SessionError> {
+async fn stream_loop(
+    ctx: &HostContext,
+    route: &mut Route,
+    mut link: SecureLink,
+    codec: VideoCodec,
+) -> Result<(), SessionError> {
     let mut allow = ctx.allow_control.clone();
     let initially_allowed = *allow.borrow_and_update();
     let mut sanitizer =
@@ -275,8 +289,8 @@ async fn stream_loop(ctx: &HostContext, route: &mut Route, mut link: SecureLink)
     let initial = controller.current();
     let params = StreamParams::new(initial.bitrate_bps, initial.fps);
     let (frames_tx, mut frames_rx) = mpsc::channel(stream::OUTPUT_QUEUE);
-    let capture_thread =
-        stream::spawn(ctx.capture, params.clone(), frames_tx).map_err(|e| SessionError::Capture(e.to_string()))?;
+    let capture_thread = stream::spawn(ctx.capture, codec, params.clone(), frames_tx)
+        .map_err(|e| SessionError::Capture(e.to_string()))?;
 
     link.sender.send(&WireMessage::ControlPermission { allowed: initially_allowed }).await?;
 

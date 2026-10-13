@@ -17,7 +17,7 @@ pub mod stun;
 pub mod wire;
 
 /// Protocol revision. Peers refuse to talk to a different major revision.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Hard cap for any single encoded message (video access units included).
 pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;

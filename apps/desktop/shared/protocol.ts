@@ -24,12 +24,15 @@ export type InputEvent =
   | { text: { text: string } }
   | 'releaseAll';
 
+/** Video codecs the agent can negotiate, in the agent's wire spelling. */
+export type StreamCodec = 'h264' | 'h265' | 'av1';
+
 export type UiCommand =
   | { type: 'host.start'; allowControl: boolean }
   | { type: 'host.stop' }
   | { type: 'host.rotatePassword' }
   | { type: 'host.setControl'; allowed: boolean }
-  | { type: 'viewer.connect'; deviceId: string; password: string }
+  | { type: 'viewer.connect'; deviceId: string; password: string; codecs?: StreamCodec[] }
   | { type: 'viewer.disconnect' }
   | { type: 'viewer.input'; event: InputEvent }
   | { type: 'viewer.requestKeyframe' }

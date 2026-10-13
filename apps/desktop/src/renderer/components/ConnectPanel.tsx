@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from 'react';
 
 import { bridge } from '../lib/bridge';
+import { decodableCodecs } from '../lib/codecSupport';
 import type { AppState } from '../state';
 
 export function ConnectPanel({ state }: { state: AppState }) {
@@ -10,12 +11,14 @@ export function ConnectPanel({ state }: { state: AppState }) {
   const busy = session?.state === 'connecting' || session?.state === 'reconnecting';
   const digits = deviceId.replace(/\D/g, '');
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (digits.length !== 9 || !password.trim()) return;
-    bridge.send({ type: 'viewer.connect', deviceId: digits, password: password.trim() });
+    const secret = password.trim();
+    if (digits.length !== 9 || !secret) return;
     // Never keep the one-time password around longer than needed.
     setPassword('');
+    const codecs = await decodableCodecs();
+    bridge.send({ type: 'viewer.connect', deviceId: digits, password: secret, codecs });
   };
 
   return (
@@ -24,7 +27,7 @@ export function ConnectPanel({ state }: { state: AppState }) {
         <h2>Uzak cihaza bağlan</h2>
         <p className="muted">Bağlantı uçtan uca şifrelenir; sunucu görüntüyü veya girdiyi göremez.</p>
       </header>
-      <form className="connect-form" onSubmit={submit}>
+      <form className="connect-form" onSubmit={(e) => void submit(e)}>
         <label>
           <span className="label">Ortak kimlik</span>
           <input

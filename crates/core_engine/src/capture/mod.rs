@@ -1,8 +1,8 @@
 //! Screen capture backends.
 //!
 //! * Windows: DXGI Desktop Duplication (GPU copy, OS dirty rectangles).
-//! * macOS: CoreGraphics display capture with Screen Recording permission
-//!   handling.
+//! * macOS: ScreenCaptureKit (12.3+, change-driven, 60 fps), falling back to
+//!   CoreGraphics display capture; Screen Recording permission handling.
 //! * Any OS: a synthetic test pattern for development and CI.
 
 use std::time::Duration;
@@ -13,6 +13,8 @@ use crate::frame::{Frame, Rect};
 mod dxgi;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod sck;
 mod synthetic;
 
 pub use synthetic::SyntheticCapturer;
@@ -69,7 +71,18 @@ fn open_native() -> Result<Box<dyn ScreenCapturer>, CaptureError> {
 
 #[cfg(target_os = "macos")]
 fn open_native() -> Result<Box<dyn ScreenCapturer>, CaptureError> {
-    Ok(Box::new(macos::CgCapturer::new()?))
+    if !macos::preflight_permission() {
+        return Err(CaptureError::PermissionDenied(
+            "grant Screen Recording to Remoti in System Settings > Privacy & Security",
+        ));
+    }
+    match sck::SckCapturer::new() {
+        Ok(c) => Ok(Box::new(c)),
+        Err(e) => {
+            tracing::warn!(error = %e, "ScreenCaptureKit unavailable; using CoreGraphics capture");
+            Ok(Box::new(macos::CgCapturer::new()?))
+        }
+    }
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]

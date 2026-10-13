@@ -9,8 +9,10 @@ use std::time::Duration;
 use remoti_core::agent::{self, AgentConfig};
 use remoti_core::capture::CaptureBackend;
 use remoti_core::congestion::RateConfig;
+use remoti_core::encoder::CodecPreference;
 use remoti_core::ipc::{SessionRole, SessionState, UiCommand, UiEvent, UiOutputs, ui_channel};
 use remoti_core::transport::LinkKind;
+use remoti_proto::peer::VideoCodec;
 use remoti_signaling::state::{AppState, Config};
 use remoti_signaling::{app, stun};
 use tokio::net::{TcpListener, UdpSocket};
@@ -61,6 +63,7 @@ fn spawn_agent(server: &Server, force_relay: bool) -> Agent {
         stun: vec![server.stun.to_string()],
         udp_port: 0,
         capture: CaptureBackend::Synthetic,
+        codec: CodecPreference::Auto,
         rate: RateConfig { max_bitrate_bps: 4_000_000, max_fps: 30, ..RateConfig::default() },
         data_dir: None,
         ephemeral_identity: true,
@@ -93,28 +96,45 @@ impl Agent {
         .expect("timed out waiting for agent event")
     }
 
-    async fn wait_video(&mut self, frames: usize) -> bool {
+    /// Waits until the viewer is connected, has a video config and has
+    /// received `frames` video packets, recording what it saw on the way.
+    async fn wait_stream(&mut self, frames: usize) -> StreamSeen {
         timeout(STEP, async {
-            let mut keyframe = false;
-            for i in 0..frames {
-                loop {
-                    tokio::select! {
-                        Some(pkt) = self.out.video.recv() => {
-                            assert!(!pkt.data.is_empty());
-                            if i == 0 {
-                                keyframe = pkt.keyframe;
-                            }
-                            break;
+            let mut seen = StreamSeen::default();
+            let mut connected = false;
+            let mut packets = 0;
+            while !(connected && seen.codec.is_some() && packets >= frames) {
+                tokio::select! {
+                    ev = self.out.events.recv() => match ev.expect("agent event stream closed") {
+                        UiEvent::Session { role: SessionRole::Viewer, state: SessionState::Connected, transport, .. } => {
+                            connected = true;
+                            seen.transport = transport;
                         }
-                        Some(_) = self.out.events.recv() => {}
+                        UiEvent::Session { state: SessionState::Ended, reason, .. } => panic!("session ended: {reason:?}"),
+                        UiEvent::VideoConfig { codec, .. } => seen.codec = Some(codec),
+                        _ => {}
+                    },
+                    Some(pkt) = self.out.video.recv() => {
+                        assert!(!pkt.data.is_empty());
+                        if packets == 0 {
+                            seen.first_keyframe = pkt.keyframe;
+                        }
+                        packets += 1;
                     }
                 }
             }
-            keyframe
+            seen
         })
         .await
-        .expect("timed out waiting for video")
+        .expect("timed out waiting for the video stream")
     }
+}
+
+#[derive(Default)]
+struct StreamSeen {
+    transport: Option<LinkKind>,
+    codec: Option<&'static str>,
+    first_keyframe: bool,
 }
 
 async fn start_host(server: &Server) -> (Agent, String, String) {
@@ -129,24 +149,21 @@ async fn start_host(server: &Server) -> (Agent, String, String) {
     (host, id, password)
 }
 
-async fn run_session(force_relay: bool, expected: LinkKind) {
+async fn run_session(force_relay: bool, expected: LinkKind, codec: VideoCodec) {
     let server = start_server().await;
     let (host, id, password) = start_host(&server).await;
     let mut viewer = spawn_agent(&server, force_relay);
     viewer.wait_event(|ev| matches!(ev, UiEvent::Signaling { connected: true, .. }).then_some(())).await;
-    viewer.commands.send(UiCommand::ViewerConnect { device_id: id, password }).await.expect("viewer command");
+    viewer
+        .commands
+        .send(UiCommand::ViewerConnect { device_id: id, password, codecs: vec![codec] })
+        .await
+        .expect("viewer command");
 
-    let transport = viewer
-        .wait_event(|ev| match ev {
-            UiEvent::Session { role: SessionRole::Viewer, state: SessionState::Connected, transport, .. } => {
-                Some(*transport)
-            }
-            UiEvent::Session { state: SessionState::Ended, reason, .. } => panic!("session ended: {reason:?}"),
-            _ => None,
-        })
-        .await;
-    assert_eq!(transport, Some(expected));
-    assert!(viewer.wait_video(10).await, "first frame must be a keyframe");
+    let seen = viewer.wait_stream(3).await;
+    assert_eq!(seen.transport, Some(expected));
+    assert_eq!(seen.codec, Some(remoti_core::ipc::webcodecs_codec(codec)));
+    assert!(seen.first_keyframe, "first frame must be a keyframe");
 
     viewer.commands.send(UiCommand::ViewerDisconnect).await.expect("viewer command");
     viewer
@@ -162,12 +179,17 @@ async fn run_session(force_relay: bool, expected: LinkKind) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn video_over_direct_quic() {
-    run_session(false, LinkKind::Quic).await;
+    run_session(false, LinkKind::Quic, VideoCodec::H264).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn av1_when_viewer_only_decodes_av1() {
+    run_session(false, LinkKind::Quic, VideoCodec::Av1).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn video_over_forced_relay() {
-    run_session(true, LinkKind::Relay).await;
+    run_session(true, LinkKind::Relay, VideoCodec::H264).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -178,7 +200,7 @@ async fn wrong_password_is_rejected() {
     viewer.wait_event(|ev| matches!(ev, UiEvent::Signaling { connected: true, .. }).then_some(())).await;
     viewer
         .commands
-        .send(UiCommand::ViewerConnect { device_id: id, password: "WRONGPW1".into() })
+        .send(UiCommand::ViewerConnect { device_id: id, password: "WRONGPW1".into(), codecs: vec![VideoCodec::H264] })
         .await
         .expect("viewer command");
     let reached_connected = viewer

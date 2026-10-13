@@ -51,6 +51,8 @@ pub struct ViewerContext {
     pub udp_port: u16,
     /// Skip direct QUIC (networks known to block UDP).
     pub force_relay: bool,
+    /// Codecs the UI can decode, offered to the host.
+    pub codecs: Vec<VideoCodec>,
     pub cancel: CancellationToken,
 }
 
@@ -173,7 +175,7 @@ async fn attempt(
     let connecting = async {
         let socket = network::bind_udp(ctx.udp_port).await.map_err(|_| AttemptError::Unreachable)?;
         let candidates = network::gather_candidates(&socket, &ctx.stun, rng).await;
-        let caps = Capabilities { codecs: vec![VideoCodec::H264], max_width: 7680, max_height: 4320, max_fps: 120 };
+        let caps = Capabilities { codecs: ctx.codecs.clone(), max_width: 7680, max_height: 4320, max_fps: 120 };
         let (hs, offer) = ViewerHandshake::start(
             rng,
             session.clone(),

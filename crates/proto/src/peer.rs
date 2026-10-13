@@ -24,7 +24,9 @@ pub struct Candidate {
     pub kind: CandidateKind,
 }
 
+/// Serialized as `h264` / `h265` / `av1` in JSON (UI); variant index in postcard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum VideoCodec {
     H264,
     H265,
@@ -48,6 +50,9 @@ pub struct Offer {
     pub spake: Bytes,
     /// Ephemeral X25519 public key.
     pub x25519: Bytes,
+    /// Ephemeral ML-KEM-768 encapsulation key (FIPS 203) for the hybrid,
+    /// post-quantum half of the key exchange.
+    pub mlkem_ek: Bytes,
     pub candidates: Vec<Candidate>,
     pub capabilities: Capabilities,
 }
@@ -60,6 +65,8 @@ pub struct Answer {
     pub spake: Bytes,
     /// Ephemeral X25519 public key.
     pub x25519: Bytes,
+    /// ML-KEM-768 ciphertext encapsulated to the viewer's `mlkem_ek`.
+    pub mlkem_ct: Bytes,
     pub candidates: Vec<Candidate>,
     /// SHA-256 of the host's ephemeral QUIC certificate (DER). Bound into the
     /// handshake transcript, so a forged certificate fails key confirmation.
@@ -75,6 +82,8 @@ pub enum RejectReason {
     RateLimited,
     /// Key confirmation failed: wrong one-time password.
     AuthFailed,
+    /// The host cannot encode any codec the viewer can decode.
+    NoCommonCodec,
     Internal,
 }
 

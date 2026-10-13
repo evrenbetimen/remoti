@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Remoti desktop shell (Electron + React)",
+  "author": "Remoti",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "concurrently -k -n vite,electron \"vite\" \"npm:dev:electron\"",
@@ -32,16 +33,56 @@
   },
   "build": {
     "appId": "app.remoti.desktop",
-    "files": ["dist-electron/**", "dist/renderer/**"],
-    "extraResources": [{ "from": "../../target/release/", "to": "bin", "filter": ["remoti-agent", "remoti-agent.exe"] }],
+    "directories": {
+      "output": "release"
+    },
+    "artifactName": "Remoti-${version}-${os}-${arch}.${ext}",
+    "publish": null,
+    "files": [
+      "dist-electron/**",
+      "dist/renderer/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../../target/release/",
+        "to": "bin",
+        "filter": [
+          "remoti-agent",
+          "remoti-agent.exe"
+        ]
+      }
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
       "extendInfo": {
         "NSScreenCaptureUsageDescription": "Remoti needs screen recording to share this screen with a viewer you approve.",
         "NSAppleEventsUsageDescription": "Remoti needs Accessibility access to apply remote keyboard and mouse input."
-      }
+      },
+      "minimumSystemVersion": "12.3",
+      "target": [
+        {
+          "target": "dmg"
+        },
+        {
+          "target": "zip"
+        }
+      ]
     },
-    "win": { "target": "nsis" }
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

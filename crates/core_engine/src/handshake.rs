@@ -4,19 +4,26 @@
 //!
 //! ```text
 //! dh        = X25519(ephemeral_viewer, ephemeral_host)
+//! kem       = ML-KEM-768.Decaps(dk_viewer, Encaps(ek_viewer))   (FIPS 203)
 //! pake      = SPAKE2(one_time_password, A = viewer_id, B = host_id)
 //! transcript= SHA-256(len-prefixed: label, session, viewer, host, offer.spake,
-//!                     offer.x25519, answer.spake, answer.x25519, answer.cert)
-//! prk       = HKDF-Extract(salt = transcript, ikm = dh || pake)
+//!                     offer.x25519, offer.mlkem_ek, answer.spake, answer.x25519,
+//!                     answer.mlkem_ct, answer.cert)
+//! prk       = HKDF-Extract(salt = transcript, ikm = dh || kem || pake)
 //! k_v2h, k_h2v, c_viewer, c_host = HKDF-Expand(prk, label_i)
 //! ```
 //!
-//! * Forward secrecy: both X25519 keys are ephemeral and dropped after use.
+//! * Forward secrecy: X25519 and ML-KEM keys are ephemeral and dropped after use.
+//! * Hybrid post-quantum: session keys stay secret unless *both* X25519 and
+//!   ML-KEM-768 are broken, so recorded traffic resists harvest-now,
+//!   decrypt-later attacks.
 //! * Zero trust towards the server: an active MITM on signaling must also guess
 //!   the out-of-band one-time password online (SPAKE2), one guess per attempt;
 //!   swapping the QUIC certificate fingerprint changes the transcript and
 //!   fails key confirmation.
 
+use ml_kem::array::Array;
+use ml_kem::{Decapsulate, DecapsulationKey, Encapsulate, EncapsulationKey, Kem, KeyExport, MlKem768};
 use remoti_proto::PROTOCOL_VERSION;
 use remoti_proto::bytes::Bytes;
 use remoti_proto::peer::{Answer, Candidate, Capabilities, Offer, VideoCodec};
@@ -32,6 +39,9 @@ use crate::crypto::{Direction, KEY_LEN, RecordOpener, RecordSealer};
 
 const TRANSCRIPT_LABEL: &[u8] = b"remoti/handshake/v1";
 const X25519_LEN: usize = 32;
+/// FIPS 203 sizes for ML-KEM-768.
+const MLKEM_EK_LEN: usize = 1184;
+const MLKEM_CT_LEN: usize = 1088;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HandshakeError {
@@ -152,10 +162,13 @@ fn derive(
     host: &DeviceId,
     offer_spake: &[u8],
     offer_x: &[u8],
+    offer_kem: &[u8],
     answer_spake: &[u8],
     answer_x: &[u8],
+    answer_kem: &[u8],
     cert_sha256: &[u8],
     dh: &[u8],
+    kem: &[u8],
     pake: &[u8],
 ) -> Result<SessionSecrets, HandshakeError> {
     let mut t = Transcript::new();
@@ -165,16 +178,19 @@ fn derive(
         host.as_str().as_bytes(),
         offer_spake,
         offer_x,
+        offer_kem,
         answer_spake,
         answer_x,
+        answer_kem,
         cert_sha256,
     ] {
         t.field(f);
     }
     let transcript = t.finish();
 
-    let mut ikm = Vec::with_capacity(dh.len() + pake.len());
+    let mut ikm = Vec::with_capacity(dh.len() + kem.len() + pake.len());
     ikm.extend_from_slice(dh);
+    ikm.extend_from_slice(kem);
     ikm.extend_from_slice(pake);
     let prk = hkdf::Salt::new(HKDF_SHA256, &transcript).extract(&ikm);
     // Best-effort wipe of the combined secret.
@@ -216,6 +232,33 @@ fn agree(private: EphemeralPrivateKey, peer_public: &[u8]) -> Result<Vec<u8>, Ha
         .map_err(|_| HandshakeError::Agreement)
 }
 
+fn mlkem_keypair() -> (DecapsulationKey<MlKem768>, Vec<u8>) {
+    let (dk, ek) = MlKem768::generate_keypair();
+    (dk, ek.to_bytes().to_vec())
+}
+
+/// Host side of ML-KEM: encapsulates to the viewer's key, returning
+/// `(ciphertext, shared_secret)`.
+fn mlkem_encapsulate(ek: &[u8]) -> Result<(Vec<u8>, Vec<u8>), HandshakeError> {
+    if ek.len() != MLKEM_EK_LEN {
+        return Err(HandshakeError::Malformed("ml-kem encapsulation key length"));
+    }
+    let key = Array::try_from(ek).map_err(|_| HandshakeError::Malformed("ml-kem encapsulation key length"))?;
+    let ek =
+        EncapsulationKey::<MlKem768>::new(&key).map_err(|_| HandshakeError::Malformed("ml-kem encapsulation key"))?;
+    let (ct, ss) = ek.encapsulate();
+    Ok((ct.to_vec(), ss.to_vec()))
+}
+
+fn mlkem_decapsulate(dk: &DecapsulationKey<MlKem768>, ct: &[u8]) -> Result<Vec<u8>, HandshakeError> {
+    if ct.len() != MLKEM_CT_LEN {
+        return Err(HandshakeError::Malformed("ml-kem ciphertext length"));
+    }
+    // Implicit rejection: a tampered ciphertext yields an unrelated secret,
+    // which then fails key confirmation.
+    dk.decapsulate_slice(ct).map(|ss| ss.to_vec()).map_err(|_| HandshakeError::Malformed("ml-kem ciphertext"))
+}
+
 /// Viewer side, created before sending the [`Offer`].
 pub struct ViewerHandshake {
     session: SessionId,
@@ -225,6 +268,8 @@ pub struct ViewerHandshake {
     spake_msg: Vec<u8>,
     x_private: EphemeralPrivateKey,
     x_public: Vec<u8>,
+    kem_private: DecapsulationKey<MlKem768>,
+    kem_public: Vec<u8>,
 }
 
 impl ViewerHandshake {
@@ -244,15 +289,17 @@ impl ViewerHandshake {
             &Identity::new(host.as_str().as_bytes()),
         );
         let (x_private, x_public) = x25519_keypair(rng)?;
+        let (kem_private, kem_public) = mlkem_keypair();
         let offer = Offer {
             protocol: PROTOCOL_VERSION,
             viewer: viewer.clone(),
             spake: Bytes(spake_msg.clone()),
             x25519: Bytes(x_public.clone()),
+            mlkem_ek: Bytes(kem_public.clone()),
             candidates,
             capabilities,
         };
-        Ok((Self { session, viewer, host, spake, spake_msg, x_private, x_public }, offer))
+        Ok((Self { session, viewer, host, spake, spake_msg, x_private, x_public, kem_private, kem_public }, offer))
     }
 
     pub fn finish(self, answer: &Answer) -> Result<SessionSecrets, HandshakeError> {
@@ -264,6 +311,7 @@ impl ViewerHandshake {
         }
         let pake = self.spake.finish(answer.spake.as_slice()).map_err(|_| HandshakeError::Pake)?;
         let dh = agree(self.x_private, answer.x25519.as_slice())?;
+        let kem = mlkem_decapsulate(&self.kem_private, answer.mlkem_ct.as_slice())?;
         derive(
             Role::Viewer,
             &self.session,
@@ -271,10 +319,13 @@ impl ViewerHandshake {
             &self.host,
             &self.spake_msg,
             &self.x_public,
+            &self.kem_public,
             answer.spake.as_slice(),
             answer.x25519.as_slice(),
+            answer.mlkem_ct.as_slice(),
             answer.cert_sha256.as_slice(),
             &dh,
+            &kem,
             &pake,
         )
     }
@@ -304,6 +355,7 @@ pub fn host_respond(
     let pake = spake.finish(offer.spake.as_slice()).map_err(|_| HandshakeError::Pake)?;
     let (x_private, x_public) = x25519_keypair(rng)?;
     let dh = agree(x_private, offer.x25519.as_slice())?;
+    let (kem_ct, kem) = mlkem_encapsulate(offer.mlkem_ek.as_slice())?;
     let secrets = derive(
         Role::Host,
         session,
@@ -311,16 +363,20 @@ pub fn host_respond(
         host,
         offer.spake.as_slice(),
         offer.x25519.as_slice(),
+        offer.mlkem_ek.as_slice(),
         &spake_msg,
         &x_public,
+        &kem_ct,
         &cert_sha256,
         &dh,
+        &kem,
         &pake,
     )?;
     let answer = Answer {
         protocol: PROTOCOL_VERSION,
         spake: Bytes(spake_msg),
         x25519: Bytes(x_public),
+        mlkem_ct: Bytes(kem_ct),
         candidates,
         cert_sha256: Bytes(cert_sha256.to_vec()),
         codec,
@@ -382,6 +438,30 @@ mod tests {
         answer.cert_sha256 = Bytes(vec![1; 32]);
         let viewer = vh.finish(&answer).unwrap();
         assert!(viewer.verify_remote(&host.local_confirmation()).is_err());
+    }
+
+    #[test]
+    fn tampered_mlkem_ciphertext_fails() {
+        let rng = SystemRandom::new();
+        let (s, v, h) = ids();
+        let (vh, offer) = ViewerHandshake::start(&rng, s.clone(), v, h.clone(), "PW234567", vec![], caps()).unwrap();
+        let (mut answer, host) =
+            host_respond(&rng, &s, &h, "PW234567", &offer, vec![], [9; 32], VideoCodec::H264).unwrap();
+        answer.mlkem_ct.0[10] ^= 0x40;
+        let viewer = vh.finish(&answer).unwrap();
+        assert!(viewer.verify_remote(&host.local_confirmation()).is_err());
+    }
+
+    #[test]
+    fn malformed_mlkem_key_is_rejected() {
+        let rng = SystemRandom::new();
+        let (s, v, h) = ids();
+        let (_, mut offer) = ViewerHandshake::start(&rng, s.clone(), v, h.clone(), "PW234567", vec![], caps()).unwrap();
+        offer.mlkem_ek = Bytes(vec![0; 32]);
+        assert!(matches!(
+            host_respond(&rng, &s, &h, "PW234567", &offer, vec![], [9; 32], VideoCodec::H264),
+            Err(HandshakeError::Malformed(_))
+        ));
     }
 
     #[test]

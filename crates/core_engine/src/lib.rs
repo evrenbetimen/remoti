@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod capture;
+pub mod color;
 pub mod congestion;
 pub mod crypto;
 pub mod encoder;
