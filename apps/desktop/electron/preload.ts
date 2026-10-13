@@ -20,6 +20,12 @@ const bridge: RemotiBridge = {
   openPrivacySettings(kind) {
     ipcRenderer.send('remoti:open-privacy', kind);
   },
+  getSignalingSettings() {
+    return ipcRenderer.invoke('remoti:settings:get');
+  },
+  setSignalingUrl(url) {
+    return ipcRenderer.invoke('remoti:settings:set-signaling', url);
+  },
   platform: process.platform,
 };
 

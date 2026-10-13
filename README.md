@@ -118,6 +118,25 @@ cd apps/desktop && npm test && npm run typecheck
 * **Congestion**: a delay- and loss-based controller fed by QUIC stats and viewer reports, with multiplicative decrease,
   additive increase and application-limited detection. It throttles FPS in steps from 10 to 60.
 
+## Hosting the signaling server
+
+The server needs one public HTTPS/WebSocket endpoint. Its own STUN responder (UDP 3478) is optional: clients can use any
+public STUN server instead, which lets it run behind a tunnel or a PaaS that only forwards HTTP.
+
+```sh
+# on an always-on machine, e.g. with a Cloudflare quick tunnel
+cloudflared tunnel --url http://localhost:8080          # prints https://<name>.trycloudflare.com
+REMOTI_LISTEN=127.0.0.1:8080 \
+REMOTI_PUBLIC_STUN=stun.l.google.com:19302,stun1.l.google.com:19302 \
+REMOTI_RELAY_URL=wss://<name>.trycloudflare.com/relay \
+  ./remoti-signaling
+```
+
+In the desktop app, open **Sunucu** in the top bar and enter `wss://<name>.trycloudflare.com/ws` (a bare host or an
+`https://` URL is accepted too). The address is saved in the app's user data folder and the agent reconnects
+immediately; every device that should reach each other must use the same server. Plain `ws://` is only accepted for a
+server on the same machine. `REMOTI_SIGNALING_URL` still sets the default when nothing is saved.
+
 ## Releases
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`. It builds the agent with `--features av1-asm`, packages a

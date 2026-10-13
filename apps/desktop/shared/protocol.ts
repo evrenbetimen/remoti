@@ -72,9 +72,22 @@ export interface VideoAck {
 }
 
 /** API exposed on `window.remoti` by the preload script. */
+export interface SignalingSettings {
+  /** Address the agent is using now. */
+  url: string;
+  /** True when the user saved an address; false means the built-in default. */
+  custom: boolean;
+  defaultUrl: string;
+}
+
+export type SetSignalingResult = { ok: true; url: string } | { ok: false; error: string };
+
 export interface RemotiBridge {
   send(cmd: UiCommand): void;
   onEvent(listener: (ev: UiEvent) => void): () => void;
   openPrivacySettings(kind: 'screen' | 'accessibility'): void;
+  getSignalingSettings(): Promise<SignalingSettings | null>;
+  /** Saves and applies a server address; `null` returns to the default. Restarts the agent. */
+  setSignalingUrl(url: string | null): Promise<SetSignalingResult>;
   platform: string;
 }

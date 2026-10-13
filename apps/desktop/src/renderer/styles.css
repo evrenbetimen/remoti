@@ -68,3 +68,8 @@ input:focus { border-color: var(--accent); }
 .remote-stage { position: relative; flex: 1; min-height: 0; background: #000; }
 .remote-canvas { width: 100%; height: 100%; object-fit: contain; display: block; outline: none; cursor: default; }
 .overlay { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); background: rgba(0, 0, 0, 0.55); pointer-events: none; }
+
+.topbar-actions { display: flex; align-items: center; gap: 14px; }
+.topbar button { -webkit-app-region: no-drag; padding: 6px 12px; }
+.server-panel { grid-column: 1 / -1; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
